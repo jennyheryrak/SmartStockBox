@@ -1,0 +1,238 @@
+#include <Arduino.h>
+#include "HX711.h"
+#include "LiquidCrystal_I2C.h"
+#include <Wire.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include "time.h"
+
+// NTP server
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 3600;  // +1h pour Madagascar
+const int daylightOffset_sec = 0; // pas d'heure d'été
+
+#define DT 33
+#define SCK 32
+
+// RFID pins
+#define RST 4
+#define NSS 25
+
+MFRC522 rfid(NSS, RST);
+
+// .read() -> prendre la valeur brute
+// .get_valeu() -> prendre la valeur après tare
+// .get_units() -> prendre la valeur après scale
+
+HX711 balance;
+
+// lcd
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// State variable
+bool sentOrNot = false;
+float lastPoids = 0;
+float poidsNet = 0;
+int iteration = 0;
+String uidStr = "";
+String lastUid = "";
+
+// -------- WiFi --------
+const char *ssid = "AP_Family";
+const char *password = "InfiniteKnowledge4Life?";
+
+// -------- Firebase --------
+const String firebaseURL = "https://smartstockbox-default-rtdb.firebaseio.com/poids.json";
+String getTimestamp();
+// -------- Fonction d'envoi --------
+void sendDataToFirebase(String uid, float poids)
+{
+    if (WiFi.status() != WL_CONNECTED)
+        return;
+
+    HTTPClient http;
+    http.begin(firebaseURL);
+    http.addHeader("Content-Type", "application/json");
+
+    String timestamp = getTimestamp();
+    String payload = "{\"uid\":\"" + uid +
+                     "\",\"poids\":" + String(poids) +
+                     ",\"date\":\"" + timestamp +
+                     "\",\"zone_prod\":\"TWF\"" +
+                     ",\"prod_sortie\":\"Yaourt Socolait\"}";
+    int code = http.POST(payload);
+
+    if (code > 0)
+    {
+        Serial.println("Données envoyées à Firebase !");
+    }
+    else
+    {
+        Serial.print("Erreur envoi: ");
+        Serial.println(code);
+    }
+
+    http.end();
+}
+
+// Get Timestamp:
+String getTimestamp()
+{
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+        return "";
+    }
+    char buf[25];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    return String(buf);
+}
+
+void setup()
+{
+
+    // initialisation NTP and get date and hours:
+    // Configuration NTP
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+    Serial.begin(115200);
+    balance.begin(DT, SCK);
+
+    // --- WiFi ---
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("WiFi connected");
+
+    // RFID:
+    SPI.begin();
+    rfid.PCD_Init();
+
+    // Initialisation LCD
+    lcd.init();
+    lcd.backlight();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+
+    lcd.print("SmartStock Box");
+    delay(1000);
+    // Mettre au repos
+    lcd.setCursor(0, 1);
+    lcd.print("Calibration...");
+    delay(2000);
+
+    // Mise à l'echelle:
+    balance.set_scale(299.312);
+
+    // Faire le tare - 0 référence
+    balance.tare();
+
+    lcd.setCursor(0, 1);
+    lcd.print("               ");
+    lcd.setCursor(0, 1);
+    lcd.print("Calibration Done");
+    delay(2000);
+    lcd.setCursor(0, 1);
+    lcd.print("                ");
+    lcd.setCursor(0, 1);
+    lcd.print("Detection Done");
+    delay(2000);
+    lcd.setCursor(0, 1);
+    lcd.print("                ");
+    lcd.setCursor(0, 1);
+    lcd.print("Poids : ");
+    delay(2000);
+}
+
+void loop()
+{
+    float poids = 0;
+    float seuil = 2;
+    if (balance.is_ready())
+    {
+
+        poids = balance.get_units(5);
+        if (abs(poids) < seuil)
+        {
+            lcd.setCursor(8, 1);
+            lcd.print("        ");
+            lcd.setCursor(8, 1);
+            lcd.print("Attente poids");
+            lcd.setCursor(8, 1);
+        }
+    }
+
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial())
+    {
+        uidStr = "";
+        for (byte i = 0; i < rfid.uid.size; i++)
+        {
+            if (rfid.uid.uidByte[i] < 0x10)
+                uidStr += "0";
+            uidStr += String(rfid.uid.uidByte[i], HEX);
+        }
+        uidStr.toUpperCase();
+        lastUid = uidStr;
+
+        rfid.PICC_HaltA(); // mettre carte en pause
+    }
+
+    if (abs(abs(lastPoids) - abs(poids)) < 10 && (poids > seuil))
+    {
+        lcd.setCursor(8, 1);
+        lcd.print("        ");
+        if (abs(poids) >= 1000)
+        {
+            lcd.setCursor(8, 1);
+            lcd.print(poids / 1000, 2);
+            lcd.print(" kg");
+        }
+        else
+        {
+            lcd.setCursor(8, 1);
+            lcd.print(poids, 0);
+            lcd.print(" g");
+        }
+        poidsNet = abs(poids);
+        sentOrNot = true;
+
+        if (lastUid != "")
+        {
+            // Serial.print("Poids stable, envoie au serveur des donnees : Poids Net : ");
+            // Serial.print(poidsNet);
+            // Serial.print(" UID : ");
+            // Serial.println(uidStr);
+            // Send data to server
+            // poidsNet et uid
+            sendDataToFirebase(lastUid, poidsNet);
+
+            sentOrNot = false;
+            lastPoids = 0;
+            poidsNet = 0;
+            iteration = 0;
+            lastUid = "";
+        }
+    }
+    lastPoids = poids;
+
+    lastUid = uidStr;
+    iteration++;
+
+    // Serial.println(" ------------------------------- ");
+    // Serial.print("Iteration : ");
+    // Serial.println(iteration);
+    // Serial.print("Poids Net : ");
+    // Serial.println(poidsNet);
+    // Serial.print("Dernier Poids : ");
+    // Serial.println(lastPoids);
+    // Serial.print("Poids actuel : ");
+    // Serial.println(poids);
+    // Serial.print("Sent or not : ");
+    // Serial.println(sentOrNot);
+    delay(200);
+}
