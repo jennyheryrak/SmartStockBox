@@ -14,8 +14,8 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 #define POT_PIN 34 // Potentiomètre pour menu
 
-const char *ssid = "AP_Family";
-const char *password = "InfiniteKnowledge4Life?";
+const char *ssid = "POCO";
+const char *password = "12345678";
 const String firebasePoidsURL = "https://smartstockbox-default-rtdb.firebaseio.com/poids.json";
 const String firebaseProduitURL = "https://smartstockbox-default-rtdb.firebaseio.com/produits.json";
 
