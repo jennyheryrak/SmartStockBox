@@ -150,18 +150,10 @@ void setup()
 
     chargerProduits();
 
-    if (totalProduits == 0)
-    {
-        lcd.clear();
-        lcd.print("Aucun produit!");
-        while (true)
-            delay(1000);
-    }
-
     // Choix initial du produit
     produitIndex = 0;
     lcd.clear();
-    lcd.print("Produit:");
+    lcd.print("Produit choisi:");
     lcd.setCursor(0, 1);
     lcd.print(produits[produitIndex].designation);
     delay(1500);
@@ -176,45 +168,40 @@ void loop()
     if (!balance.is_ready())
         return;
 
-    // -------- Menu dynamique (si plusieurs produits) --------
-    if (totalProduits > 1)
+    // -------- Menu dynamique --------
+    int potValue = analogRead(POT_PIN);
+    int newIndex = map(potValue, 0, 4095, 0, totalProduits - 1);
+
+    static int lastMenuIndex = -1;
+    static unsigned long lastChangeTime = 0;
+    const unsigned long STABLE_DELAY = 1500; // 1,5 s pour confirmer
+
+    // Changement du produit détecté
+    if (newIndex != lastMenuIndex)
     {
-        int potValue = analogRead(POT_PIN);
-        int newIndex = map(potValue, 0, 4095, 0, totalProduits - 1);
-
-        static int lastMenuIndex = -1;
-        static unsigned long lastChangeTime = 0;
-        const unsigned long STABLE_DELAY = 1500;
-
-        if (newIndex != lastMenuIndex)
-        {
-            lastMenuIndex = newIndex;
-            lastChangeTime = millis();
-            lcd.clear();
-            lcd.print("Choisir produit:");
-            lcd.setCursor(0, 1);
-            lcd.print(produits[newIndex].designation);
-        }
-
-        if (millis() - lastChangeTime > STABLE_DELAY)
-        {
-            if (produitIndex != newIndex)
-            {
-                produitIndex = newIndex;
-                poidsEnvoye = false;
-                lcd.clear();
-                lcd.print("Produit choisi:");
-                lcd.setCursor(0, 1);
-                lcd.print(produits[produitIndex].designation);
-                delay(1000);
-                lcd.clear();
-                lcd.print("Pret a peser...");
-            }
-        }
+        lastMenuIndex = newIndex;
+        lastChangeTime = millis();
+        lcd.clear();
+        lcd.print("Choisir produit:");
+        lcd.setCursor(0, 1);
+        lcd.print(produits[newIndex].designation);
     }
-    else
+
+    // Confirmer le produit si stabilisé
+    if (millis() - lastChangeTime > STABLE_DELAY)
     {
-        produitIndex = 0; // un seul produit => forcé
+        if (produitIndex != newIndex)
+        {
+            produitIndex = newIndex;
+            poidsEnvoye = false; // reset pour le nouveau produit
+            lcd.clear();
+            lcd.print("Produit choisi:");
+            lcd.setCursor(0, 1);
+            lcd.print(produits[produitIndex].designation);
+            delay(1000);
+            lcd.clear();
+            lcd.print("Pret a peser...");
+        }
     }
 
     // -------- Lecture poids --------
